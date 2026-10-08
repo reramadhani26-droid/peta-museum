@@ -2,115 +2,97 @@ import streamlit as st
 import pandas as pd
 import requests
 
-# Konfigurasi Halaman
 st.set_page_config(page_title="World Museum Explorer", page_icon="🌍", layout="wide")
 
 st.title("🌍 Peta Live Museum Dunia")
-st.markdown("Cari kota mana saja di dunia, dan biarkan sistem kami menarik data seluruh museum di sekitarnya secara otomatis! (Menggunakan Overpass & Wikipedia API)")
+st.markdown("Cari kota mana saja di dunia, dan sistem kami akan menarik data beserta gambar koleksi museum langsung dari ensiklopedia global secara instan!")
 st.divider()
 
-# 1. FITUR PENCARIAN KOTA
-nama_kota = st.text_input("🔍 Ketik nama kota (Misal: Yogyakarta, Paris, London, Tokyo):", "Yogyakarta")
+nama_kota = st.text_input("🔍 Ketik nama kota di dunia (Misal: Jakarta, Paris, London, Tokyo):", "Jakarta")
 
-# Fungsi untuk mencari koordinat kota
-def cari_koordinat_kota(kota):
+@st.cache_data # Fitur ini menyimpan sementara data yang dicari agar web tidak lambat
+def cari_museum_wikipedia(kota):
+    daftar_museum = []
     try:
-        url = f"https://nominatim.openstreetmap.org/search?q={kota}&format=json&limit=1"
-        header = {'User-Agent': 'TugasInforApp/1.0'}
-        respon_mentah = requests.get(url, headers=header, timeout=10)
+        # Langkah 1: Mencari artikel Wikipedia yang mengandung nama kota dan kata "museum"
+        # Kita menggunakan Wikipedia bahasa Inggris agar datanya lengkap untuk seluruh dunia
+        url_search = "https://en.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": f"{kota} museum",
+            "utf8": "",
+            "format": "json",
+            "srlimit": 15 # Mengambil maksimal 15 hasil pencarian teratas
+        }
         
-        # Cek apakah server merespon dengan baik (Status 200 = OK)
-        if respon_mentah.status_code == 200:
-            respon_json = respon_mentah.json()
-            if respon_json:
-                return float(respon_json[0]['lat']), float(respon_json[0]['lon'])
-    except Exception as e:
-        pass
-    return None, None
-
-# Fungsi untuk menarik data museum di sekitar koordinat (Radius 15km)
-@st.cache_data # Fitur pintar Streamlit agar web tidak loading terus menerus
-def tarik_data_museum(lat, lon):
-    url_overpass = "http://overpass-api.de/api/interpreter"
-    query = f"""
-    [out:json];
-    node(around:15000,{lat},{lon})["tourism"="museum"];
-    out center;
-    """
-    try:
-        respon_mentah = requests.get(url_overpass, params={'data': query}, timeout=15)
+        header = {'User-Agent': 'TugasInforApp/1.0 (Student Project)'}
+        respon_search = requests.get(url_search, params=params, headers=header, timeout=10)
         
-        # Mencegah JSONDecodeError: Hanya ubah ke JSON jika server membalas dengan OK (200)
-        if respon_mentah.status_code == 200:
-            respon_json = respon_mentah.json()
-            daftar_museum = []
+        if respon_search.status_code == 200:
+            data_search = respon_search.json()
+            hasil_pencarian = data_search.get("query", {}).get("search", [])
             
-            for item in respon_json.get('elements', []):
-                if 'tags' in item and 'name' in item['tags']:
-                    daftar_museum.append({
-                        'Nama_Museum': item['tags']['name'],
-                        'lat': item['lat'],
-                        'lon': item['lon']
-                    })
-            return pd.DataFrame(daftar_museum)
-        else:
-            return pd.DataFrame() # Kembalikan data kosong jika server API sedang sibuk
-    except Exception as e:
-        return pd.DataFrame() # Kembalikan data kosong jika terjadi error internet
-
-# Fungsi untuk mencari info di Wikipedia
-def cari_info_wikipedia(nama_museum):
-    try:
-        url = f"https://id.wikipedia.org/api/rest_v1/page/summary/{nama_museum}"
-        respon_mentah = requests.get(url, timeout=10)
-        
-        if respon_mentah.status_code == 200:
-            respon_json = respon_mentah.json()
-            if 'title' in respon_json:
-                deskripsi = respon_json.get('extract', 'Deskripsi tidak ditemukan di Wikipedia.')
-                gambar = respon_json.get('thumbnail', {}).get('source', 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/300px-No_image_available.svg.png')
-                return deskripsi, gambar
-    except Exception as e:
-        pass
-    return "Belum ada artikel Wikipedia bahasa Indonesia yang spesifik untuk museum ini.", "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/300px-No_image_available.svg.png"
-
-
-# --- EKSEKUSI PROGRAM UTAMA ---
-if nama_kota:
-    with st.spinner("Sedang mencari koordinat kota..."):
-        lat_kota, lon_kota = cari_koordinat_kota(nama_kota)
-    
-    if lat_kota and lon_kota:
-        st.success(f"Lokasi '{nama_kota}' ditemukan! Menarik data museum dari server satelit...")
-        
-        # Mengambil database live
-        with st.spinner("Tunggu sebentar ya, sedang menyedot data dari OpenStreetMap..."):
-            df_museum = tarik_data_museum(lat_kota, lon_kota)
-        
-        if not df_museum.empty:
-            st.write(f"Menemukan **{len(df_museum)}** museum di sekitar {nama_kota}.")
-            
-            # BAGIAN 2: Menampilkan Peta
-            st.map(df_museum, zoom=11)
-            st.divider()
-            
-            # BAGIAN 3: Menampilkan Info Valid dari Wikipedia
-            st.subheader("🏛️ Eksplorasi Detail Museum")
-            pilihan = st.selectbox("Pilih museum yang ingin dilihat detailnya:", df_museum['Nama_Museum'].sort_values())
-            
-            if pilihan:
-                st.info("Sedang mencari data sejarah valid dari Wikipedia...")
-                deskripsi, link_gambar = cari_info_wikipedia(pilihan)
+            # Langkah 2: Mengambil detail setiap artikel (Koordinat, Gambar, Deskripsi)
+            for item in hasil_pencarian:
+                judul = item["title"]
                 
-                kolom1, kolom2 = st.columns([1, 1.5])
-                with kolom1:
-                    st.image(link_gambar, use_container_width=True)
-                with kolom2:
-                    st.header(pilihan)
-                    st.write(deskripsi)
-                    kata_kunci = pilihan.replace(" ", "+")
-                    st.link_button(f"🔍 Telusuri '{pilihan}' di Google", f"https://www.google.com/search?q={kata_kunci}")
-        else:
-            st.warning("Data museum kosong atau Server Peta sedang sibuk. Coba cari kota lain atau coba lagi dalam beberapa detik.")
+                # Mengakses API Summary dari Wikipedia untuk mendapatkan deskripsi singkat dan titik kordinat
+                url_detail = f"https://en.wikipedia.org/api/rest_v1/page/summary/{judul}"
+                respon_detail = requests.get(url_detail, headers=header, timeout=5)
+                
+                if respon_detail.status_code == 200:
+                    data_detail = respon_detail.json()
+                    
+                    # Kita hanya memasukkan data ke tabel jika artikel tersebut memiliki titik koordinat (Lokasi valid)
+                    if "coordinates" in data_detail:
+                        daftar_museum.append({
+                            'Nama_Museum': judul,
+                            'lat': data_detail["coordinates"]["lat"],
+                            'lon': data_detail["coordinates"]["lon"],
+                            'deskripsi': data_detail.get("extract", "No description available."),
+                            'gambar': data_detail.get("thumbnail", {}).get("source", "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/300px-No_image_available.svg.png"),
+                            'url_wiki': data_detail.get("content_urls", {}).get("desktop", {}).get("page", "")
+                        })
+                        
+        return pd.DataFrame(daftar_museum)
+    except Exception as e:
+        return pd.DataFrame() # Jika terjadi error koneksi internet, kembalikan tabel kosong agar tidak crash
+
+if nama_kota:
+    with st.spinner(f"Mencari data museum di {nama_kota} dari database satelit global..."):
+        df_museum = cari_museum_wikipedia(nama_kota)
+    
+    if not df_museum.empty:
+        st.success(f"Berhasil menemukan **{len(df_museum)}** museum yang memiliki data peta valid di sekitar '{nama_kota}'!")
+        
+        # BAGIAN 1: Menampilkan titik koordinat ke dalam Peta Interaktif
+        st.map(df_museum, zoom=10)
+        st.divider()
+        
+        # BAGIAN 2: Menampilkan Galeri dan Informasi Sejarah
+        st.subheader("🏛️ Eksplorasi Detail Museum")
+        st.write("Pilih salah satu museum dari peta di atas untuk melihat koleksi dan sejarahnya:")
+        
+        # Membuat kotak pilihan (*Dropdown*)
+        pilihan = st.selectbox("Daftar Museum Ditemukan:", df_museum['Nama_Museum'].sort_values())
+        
+        if pilihan:
+            # Mencari baris data spesifik yang dipilih pengguna
+            data_pilihan = df_museum[df_museum['Nama_Museum'] == pilihan].iloc[0]
+            
+            # Membagi layar menjadi 2 kolom (Kiri untuk gambar, Kanan untuk teks)
+            kolom1, kolom2 = st.columns([1, 1.5])
+            with kolom1:
+                st.image(data_pilihan['gambar'], use_container_width=True, caption=data_pilihan['Nama_Museum'])
+            with kolom2:
+                st.header(data_pilihan['Nama_Museum'])
+                st.write(data_pilihan['deskripsi'])
+                
+                # Tombol pintasan untuk mengeksplorasi lebih jauh
+                st.link_button("📖 Baca Sejarah Lengkap (Wikipedia)", data_pilihan['url_wiki'])
+                
+                kata_kunci = data_pilihan['Nama_Museum'].replace(" ", "+")
+                st.link_button(f"🔍 Telusuri Gambar Lainnya di Google", f"https://www.google.com/search?q={kata_kunci}&tbm=isch")
     else:
-        st.error("Kota tidak ditemukan. Coba ketik nama kota yang lebih spesifik (Misal: 'Jakarta, Indonesia' atau 'Tokyo, Japan').")
+        st.warning(f"Tidak dapat menemukan titik lokasi valid untuk museum di wilayah '{nama_kota}'. Coba gunakan nama kota dalam bahasa Inggris (Misal: 'Yogyakarta', 'Rome', 'New York').")
